@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -10,107 +10,23 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   MapPin,
   Bell,
-  LogOut,
   Calendar,
   Clock,
   CheckCircle,
   AlertCircle,
-  XCircle,
   Navigation,
   MessageSquare,
-  Timer,
-  Target,
 } from "lucide-react";
 import { useAuth } from "@/hook/use-auth";
+import { createClient } from "@/utils/supabase/client";
+import type { Issue, IssueUpdate } from "@/types/issue";
 
-// Mock data for officer's assigned issues
-const mockAssignedIssues = [
-  {
-    id: "1",
-    title: "Pothole on Main Street",
-    description: "Large pothole causing traffic issues",
-    status: "in_progress",
-    priority: "high",
-    category: "roads",
-    reportedAt: "2024-01-15",
-    location: "123 Main St",
-    reportedBy: "John Citizen",
-    assignedAt: "2024-01-16",
-    slaDeadline: "2024-01-18",
-    coordinates: { lat: 40.7128, lng: -74.006 },
-    updates: [
-      {
-        date: "2024-01-16",
-        message: "Issue assigned to officer",
-        type: "system",
-      },
-      {
-        date: "2024-01-16",
-        message: "Inspected the site, materials ordered",
-        type: "officer",
-      },
-    ],
-  },
-  {
-    id: "4",
-    title: "Water Main Break",
-    description: "Water flooding the street",
-    status: "in_progress",
-    priority: "critical",
-    category: "water",
-    reportedAt: "2024-01-22",
-    location: "321 Water St",
-    reportedBy: "Sarah Johnson",
-    assignedAt: "2024-01-22",
-    slaDeadline: "2024-01-22",
-    coordinates: { lat: 40.7589, lng: -73.9851 },
-    updates: [
-      {
-        date: "2024-01-22",
-        message: "Emergency response initiated",
-        type: "officer",
-      },
-      {
-        date: "2024-01-22",
-        message: "Water department contacted",
-        type: "officer",
-      },
-    ],
-  },
-  {
-    id: "6",
-    title: "Damaged Park Bench",
-    description: "Broken bench in Central Park",
-    status: "pending",
-    priority: "low",
-    category: "parks",
-    reportedAt: "2024-01-20",
-    location: "Central Park, Section B",
-    reportedBy: "Mike Wilson",
-    assignedAt: "2024-01-21",
-    slaDeadline: "2024-01-25",
-    coordinates: { lat: 40.7829, lng: -73.9654 },
-    updates: [
-      {
-        date: "2024-01-21",
-        message: "Issue assigned to officer",
-        type: "system",
-      },
-    ],
-  },
-];
+const supabase = createClient();
 
 const getStatusIcon = (status: string) => {
   switch (status) {
@@ -121,7 +37,7 @@ const getStatusIcon = (status: string) => {
     case "pending":
       return <AlertCircle className="w-4 h-4 text-red-600" />;
     default:
-      return <XCircle className="w-4 h-4 text-gray-600" />;
+      return null;
   }
 };
 
@@ -138,261 +54,300 @@ const getStatusColor = (status: string) => {
   }
 };
 
-const getPriorityColor = (priority: string) => {
-  switch (priority) {
-    case "critical":
-      return "bg-red-600 text-white";
-    case "high":
-      return "bg-red-100 text-red-800";
-    case "medium":
-      return "bg-yellow-100 text-yellow-800";
-    case "low":
-      return "bg-green-100 text-green-800";
-    default:
-      return "bg-gray-100 text-gray-800";
-  }
-};
-
-const getSlaStatus = (deadline: string) => {
-  const now = new Date();
-  const slaDate = new Date(deadline);
-  const hoursLeft = (slaDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-  if (hoursLeft < 0)
-    return {
-      status: "overdue",
-      color: "bg-red-100 text-red-800",
-      text: "Overdue",
-    };
-  if (hoursLeft < 24)
-    return {
-      status: "urgent",
-      color: "bg-orange-100 text-orange-800",
-      text: "Due Soon",
-    };
-  return {
-    status: "on_time",
-    color: "bg-green-100 text-green-800",
-    text: "On Time",
-  };
-};
-
 export function WorkerDashboard() {
   const { user } = useAuth();
-  const [issues, setIssues] = useState(mockAssignedIssues);
-  const [selectedIssue, setSelectedIssue] = useState<string | null>(null);
-  const [updateMessage, setUpdateMessage] = useState("");
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [updates, setUpdates] = useState<IssueUpdate[]>([]);
+  const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
+  const [newUpdate, setNewUpdate] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
 
-  const updateIssueStatus = (issueId: string, newStatus: string) => {
-    setIssues((prev) =>
-      prev.map((issue) =>
-        issue.id === issueId
-          ? {
-              ...issue,
-              status: newStatus,
-              updates: [
-                ...issue.updates,
-                {
-                  date: new Date().toISOString().split("T")[0],
-                  message: `Status updated to ${newStatus}`,
-                  type: "officer" as const,
-                },
-              ],
-            }
-          : issue
+  // === FETCH ISSUES ===
+  useEffect(() => {
+    if (!user) return;
+
+    const fetchData = async () => {
+      setIsLoading(true);
+
+      const { data: issueData, error: issueError } = await supabase
+        .from("issues")
+        .select(
+          `
+          id,
+          title,
+          description,
+          category,
+          priority,
+          location,
+          coordinates,
+          status,
+          reported_at,
+          sla_deadline,
+          reported_by:reportedBy (full_name),
+          assigned_to (full_name)
+        `
+        )
+        .eq("assigned_to", user.id)
+        .order("sla_deadline", { ascending: true });
+
+      if (issueError) {
+        console.error(issueError);
+        setIsLoading(false);
+        return;
+      }
+
+      const issuesWithCoords: Issue[] = (issueData || []).map((i) => {
+        const status = i.status as "pending" | "in_progress" | "resolved";
+        return {
+          ...i,
+          coordinates: i.coordinates ? JSON.parse(i.coordinates) : null,
+          reported_by: Array.isArray(i.reported_by)
+            ? i.reported_by[0] ?? null
+            : null,
+          assigned_to: Array.isArray(i.assigned_to)
+            ? i.assigned_to[0] ?? null
+            : null,
+          status,
+        };
+      });
+
+      setIssues(issuesWithCoords);
+
+      if (issuesWithCoords.length > 0 && !selectedIssueId) {
+        setSelectedIssueId(issuesWithCoords[0].id);
+      }
+
+      setIsLoading(false);
+    };
+
+    fetchData();
+
+    // === REALTIME: ISSUES ===
+    const issueChannel = supabase
+      .channel("worker_issues")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "issues",
+          filter: `assigned_to=eq.${user.id}`,
+        },
+        (payload) => {
+          const newIssue = payload.new as {
+            id: string;
+            title: string;
+            description: string | null;
+            category: string | null;
+            priority: string | null;
+            location: string | null;
+            coordinates: string | null;
+            status: string;
+            reported_at: string;
+            sla_deadline: string | null;
+            reported_by?: { full_name: string }[] | null;
+            assigned_to?: { full_name: string }[] | null;
+          };
+
+          const status = newIssue.status as
+            | "pending"
+            | "in_progress"
+            | "resolved";
+
+          const formatted: Issue = {
+            ...newIssue,
+            coordinates: newIssue.coordinates
+              ? JSON.parse(newIssue.coordinates)
+              : null,
+            reported_by: Array.isArray(newIssue.reported_by)
+              ? newIssue.reported_by[0] ?? null
+              : null,
+            assigned_to: Array.isArray(newIssue.assigned_to)
+              ? newIssue.assigned_to[0] ?? null
+              : null,
+            status,
+          };
+
+          if (payload.eventType === "INSERT") {
+            setIssues((cur) => [formatted, ...cur]);
+          } else if (payload.eventType === "UPDATE") {
+            setIssues((cur) =>
+              cur.map((i) => (i.id === formatted.id ? formatted : i))
+            );
+          }
+        }
       )
-    );
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(issueChannel);
+    };
+  }, [user, selectedIssueId]);
+
+  // === FETCH UPDATES FOR SELECTED ISSUE ===
+  useEffect(() => {
+    if (!selectedIssueId) return;
+
+    const fetchUpdates = async () => {
+      const { data, error } = await supabase
+        .from("issue_updates")
+        .select(
+          `
+          id,
+          issue_id,
+          user_id,
+          message,
+          created_at,
+          user:users (full_name)
+        `
+        )
+        .eq("issue_id", selectedIssueId)
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.error(error);
+        return;
+      }
+
+      const formatted: IssueUpdate[] = (data || []).map((u) => ({
+        ...u,
+        user: Array.isArray(u.user) ? u.user[0] ?? null : null,
+      }));
+
+      setUpdates(formatted);
+    };
+
+    fetchUpdates();
+
+    // === REALTIME: UPDATES ===
+    const updateChannel = supabase
+      .channel(`updates_${selectedIssueId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "issue_updates",
+          filter: `issue_id=eq.${selectedIssueId}`,
+        },
+        (payload) => {
+          const newUpdate = payload.new as {
+            id: string;
+            issue_id: string;
+            user_id: string;
+            message: string;
+            created_at: string;
+          };
+
+          supabase
+            .from("users")
+            .select("full_name")
+            .eq("id", newUpdate.user_id)
+            .single()
+            .then(({ data }) => {
+              const userInfo = data ? { full_name: data.full_name } : null;
+              setUpdates((cur) => [...cur, { ...newUpdate, user: userInfo }]);
+            });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(updateChannel);
+    };
+  }, [selectedIssueId]);
+
+  // === ADD UPDATE ===
+  const addUpdate = async () => {
+    if (!newUpdate.trim() || !selectedIssueId || !user?.id) return;
+
+    const { error } = await supabase.from("issue_updates").insert({
+      issue_id: selectedIssueId,
+      user_id: user.id,
+      message: newUpdate,
+    });
+
+    if (error) {
+      alert("Failed to add update: " + error.message);
+    } else {
+      setNewUpdate("");
+    }
   };
 
-  const addUpdate = (issueId: string) => {
-    if (!updateMessage.trim()) return;
-
-    setIssues((prev) =>
-      prev.map((issue) =>
-        issue.id === issueId
-          ? {
-              ...issue,
-              updates: [
-                ...issue.updates,
-                {
-                  date: new Date().toISOString().split("T")[0],
-                  message: updateMessage,
-                  type: "officer" as const,
-                },
-              ],
-            }
-          : issue
-      )
-    );
-    setUpdateMessage("");
-  };
-
-  const getDirections = (coordinates: { lat: number; lng: number }) => {
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${coordinates.lat},${coordinates.lng}`;
+  // === DIRECTIONS ===
+  const getDirections = (coords: { lat: number; lng: number }) => {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`;
     window.open(url, "_blank");
   };
 
-  const selectedIssueData = issues.find((issue) => issue.id === selectedIssue);
+  const selectedIssue = issues.find((i) => i.id === selectedIssueId);
 
-  // Statistics
-  const stats = {
-    total: issues.length,
-    pending: issues.filter((i) => i.status === "pending").length,
-    inProgress: issues.filter((i) => i.status === "in_progress").length,
-    resolved: issues.filter((i) => i.status === "resolved").length,
-    overdue: issues.filter(
-      (i) => getSlaStatus(i.slaDeadline).status === "overdue"
-    ).length,
-  };
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-lg text-gray-600">Please log in as a worker.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-4">
-              <div className="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center">
                 <MapPin className="w-5 h-5 text-white" />
               </div>
               <h1 className="text-xl font-semibold text-gray-900">
-                Civic Sense Officer
+                Field Worker Portal
               </h1>
             </div>
-
-            <div className="flex items-center space-x-4">
-              <Button variant="ghost" size="sm">
-                <Bell className="w-4 h-4" />
-              </Button>
-
-              {/* <div className="flex items-center space-x-2">
-                <Avatar className="w-8 h-8">
-                  <AvatarImage src={user?.avatar || "/placeholder.svg"} />
-                  <AvatarFallback>{user?.name?.charAt(0)}</AvatarFallback>
-                </Avatar>
-                <div className="text-left">
-                  <span className="text-sm font-medium text-gray-700 block">
-                    {user?.name}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    {user?.department}
-                  </span>
-                </div>
-              </div>
-
-              <Button variant="ghost" size="sm" onClick={logout}>
-                <LogOut className="w-4 h-4" />
-              </Button> */}
-            </div>
+            <Button variant="ghost" size="sm">
+              <Bell className="w-4 h-4" />
+            </Button>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">
-            Welcome back
+            Hello, {user.user_metadata?.full_name || "Worker"}
           </h2>
-          <p className="text-gray-600">
-            Manage your assigned issues and update their status
-          </p>
-        </div>
-
-        {/* Statistics Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Target className="w-6 h-6 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {stats.total}
-                  </p>
-                  <p className="text-sm text-gray-600">Assigned Issues</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
-                  <AlertCircle className="w-6 h-6 text-red-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {stats.pending}
-                  </p>
-                  <p className="text-sm text-gray-600">Pending</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
-                  <Clock className="w-6 h-6 text-yellow-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {stats.inProgress}
-                  </p>
-                  <p className="text-sm text-gray-600">In Progress</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
-                  <Timer className="w-6 h-6 text-orange-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {stats.overdue}
-                  </p>
-                  <p className="text-sm text-gray-600">Overdue</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <p className="text-gray-600">Manage your field assignments</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Issues List */}
+          {/* Issue List */}
           <div className="lg:col-span-2">
             <Card>
               <CardHeader>
-                <CardTitle>Your Assigned Issues</CardTitle>
-                <CardDescription>
-                  Issues assigned to you for resolution
-                </CardDescription>
+                <CardTitle>Assigned Tasks</CardTitle>
+                <CardDescription>Click to view details</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {issues.map((issue) => {
-                    const slaInfo = getSlaStatus(issue.slaDeadline);
-                    return (
+                {isLoading ? (
+                  <p className="text-center py-8 text-gray-500">Loading...</p>
+                ) : issues.length === 0 ? (
+                  <p className="text-center py-8 text-gray-500">
+                    No tasks assigned.
+                  </p>
+                ) : (
+                  <div className="space-y-4">
+                    {issues.map((issue) => (
                       <div
                         key={issue.id}
                         className={`border rounded-lg p-4 cursor-pointer transition-colors ${
-                          selectedIssue === issue.id
-                            ? "bg-blue-50 border-blue-200"
+                          selectedIssueId === issue.id
+                            ? "bg-orange-50 border-orange-200"
                             : "hover:bg-gray-50"
                         }`}
-                        onClick={() => setSelectedIssue(issue.id)}
+                        onClick={() => setSelectedIssueId(issue.id)}
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
-                            <div className="flex items-center space-x-2 mb-2">
+                            <div className="flex items-center gap-2 mb-2">
                               {getStatusIcon(issue.status)}
                               <h3 className="font-semibold text-gray-900">
                                 {issue.title}
@@ -400,171 +355,98 @@ export function WorkerDashboard() {
                               <Badge className={getStatusColor(issue.status)}>
                                 {issue.status.replace("_", " ")}
                               </Badge>
-                              <Badge
-                                className={getPriorityColor(issue.priority)}
-                              >
-                                {issue.priority}
-                              </Badge>
-                              <Badge className={slaInfo.color}>
-                                {slaInfo.text}
-                              </Badge>
                             </div>
                             <p className="text-gray-600 mb-2">
                               {issue.description}
                             </p>
-                            <div className="flex items-center space-x-4 text-sm text-gray-500">
-                              <span className="flex items-center space-x-1">
+                            <div className="flex flex-wrap gap-4 text-sm text-gray-500">
+                              <span className="flex items-center gap-1">
                                 <MapPin className="w-3 h-3" />
-                                <span>{issue.location}</span>
+                                {issue.location}
                               </span>
-                              <span className="flex items-center space-x-1">
-                                <Calendar className="w-3 h-3" />
-                                <span>Due: {issue.slaDeadline}</span>
-                              </span>
+                              {issue.sla_deadline && (
+                                <span className="flex items-center gap-1">
+                                  <Calendar className="w-3 h-3" />
+                                  {new Date(
+                                    issue.sla_deadline
+                                  ).toLocaleDateString()}
+                                </span>
+                              )}
                             </div>
                           </div>
-                          <div className="flex space-x-2 ml-4">
+                          {issue.coordinates && (
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                getDirections(issue.coordinates);
+                                getDirections(issue.coordinates!);
                               }}
                             >
                               <Navigation className="w-4 h-4" />
                             </Button>
-                          </div>
+                          )}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
 
-          {/* Issue Details */}
+          {/* Updates Panel */}
           <div>
-            {selectedIssueData ? (
+            {selectedIssue ? (
               <Card>
                 <CardHeader>
-                  <CardTitle>Issue Details</CardTitle>
-                  <CardDescription>
-                    Manage and update issue status
-                  </CardDescription>
+                  <CardTitle>Activity Log</CardTitle>
+                  <CardDescription>{selectedIssue.title}</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-2">
-                      {selectedIssueData.title}
-                    </h3>
-                    <p className="text-gray-600 mb-4">
-                      {selectedIssueData.description}
-                    </p>
-
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Reported by:</span>
-                        <span className="font-medium">
-                          {selectedIssueData.reportedBy}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Location:</span>
-                        <span className="font-medium">
-                          {selectedIssueData.location}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Assigned:</span>
-                        <span className="font-medium">
-                          {selectedIssueData.assignedAt}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">SLA Deadline:</span>
-                        <span className="font-medium">
-                          {selectedIssueData.slaDeadline}
-                        </span>
-                      </div>
-                    </div>
+                  <div className="max-h-96 overflow-y-auto space-y-3">
+                    {updates.length === 0 ? (
+                      <p className="text-center text-gray-500 py-8">
+                        No updates yet.
+                      </p>
+                    ) : (
+                      updates.map((upd) => (
+                        <div key={upd.id} className="flex gap-3">
+                          <Avatar className="w-8 h-8">
+                            <AvatarFallback>
+                              {upd.user?.full_name?.[0] || "W"}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1">
+                            <p className="text-sm font-medium">
+                              {upd.user?.full_name || "Worker"}
+                            </p>
+                            <p className="text-sm text-gray-600">
+                              {upd.message}
+                            </p>
+                            <p className="text-xs text-gray-400">
+                              {new Date(upd.created_at).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
 
                   <div className="border-t pt-4">
-                    <h4 className="font-medium text-gray-900 mb-2">
-                      Update Status
-                    </h4>
-                    <Select
-                      value={selectedIssueData.status}
-                      onValueChange={(value) =>
-                        updateIssueStatus(selectedIssueData.id, value)
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pending">Pending</SelectItem>
-                        <SelectItem value="in_progress">In Progress</SelectItem>
-                        <SelectItem value="resolved">Resolved</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="border-t pt-4">
-                    <h4 className="font-medium text-gray-900 mb-2">
-                      Add Update
-                    </h4>
                     <Textarea
-                      placeholder="Add a progress update..."
-                      value={updateMessage}
-                      onChange={(e) => setUpdateMessage(e.target.value)}
+                      placeholder="Add field note..."
+                      value={newUpdate}
+                      onChange={(e) => setNewUpdate(e.target.value)}
                       rows={3}
                     />
                     <Button
                       className="mt-2 w-full"
-                      onClick={() => addUpdate(selectedIssueData.id)}
-                      disabled={!updateMessage.trim()}
+                      onClick={addUpdate}
+                      disabled={!newUpdate.trim()}
                     >
                       <MessageSquare className="w-4 h-4 mr-2" />
                       Add Update
-                    </Button>
-                  </div>
-
-                  <div className="border-t pt-4">
-                    <h4 className="font-medium text-gray-900 mb-2">
-                      Progress History
-                    </h4>
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {selectedIssueData.updates.map((update, index) => (
-                        <div key={index} className="text-sm">
-                          <div className="flex items-center space-x-2">
-                            <div
-                              className={`w-2 h-2 rounded-full ${
-                                update.type === "officer"
-                                  ? "bg-blue-500"
-                                  : "bg-gray-400"
-                              }`}
-                            />
-                            <span className="text-gray-500">{update.date}</span>
-                          </div>
-                          <p className="text-gray-700 ml-4">{update.message}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="border-t pt-4">
-                    <Button
-                      variant="outline"
-                      className="w-full bg-transparent"
-                      onClick={() =>
-                        getDirections(selectedIssueData.coordinates)
-                      }
-                    >
-                      <Navigation className="w-4 h-4 mr-2" />
-                      Get Directions
                     </Button>
                   </div>
                 </CardContent>
@@ -572,10 +454,7 @@ export function WorkerDashboard() {
             ) : (
               <Card>
                 <CardContent className="p-8 text-center">
-                  <Target className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-600">
-                    Select an issue to view details and manage updates
-                  </p>
+                  <p className="text-gray-600">Select a task to view updates</p>
                 </CardContent>
               </Card>
             )}

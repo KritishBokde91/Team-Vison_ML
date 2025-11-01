@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -18,113 +18,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MapPin,
   Bell,
-  LogOut,
   Calendar,
   Clock,
   CheckCircle,
   AlertCircle,
-  XCircle,
-  TrendingUp,
-  Search,
-  BarChart3,
-  Map,
-  AlertTriangle,
+  Navigation,
+  MessageSquare,
+  Timer,
+  Target,
 } from "lucide-react";
 import { useAuth } from "@/hook/use-auth";
+import { createClient } from "@/utils/supabase/client";
+import type { Issue } from "@/types/issue";
 
-// Mock data for all issues in the system
-const mockAllIssues = [
-  {
-    id: "1",
-    title: "Pothole on Main Street",
-    description: "Large pothole causing traffic issues",
-    status: "in_progress",
-    priority: "high",
-    category: "roads",
-    reportedAt: "2024-01-15",
-    location: "123 Main St",
-    reportedBy: "John Citizen",
-    assignedOfficer: "Officer Johnson",
-    slaStatus: "on_time",
-  },
-  {
-    id: "2",
-    title: "Broken Street Light",
-    description: "Street light not working on Oak Avenue",
-    status: "resolved",
-    priority: "medium",
-    category: "lighting",
-    reportedAt: "2024-01-10",
-    location: "456 Oak Ave",
-    reportedBy: "Jane Smith",
-    assignedOfficer: "Officer Smith",
-    slaStatus: "completed",
-  },
-  {
-    id: "3",
-    title: "Graffiti on Building",
-    description: "Vandalism on community center wall",
-    status: "pending",
-    priority: "low",
-    category: "vandalism",
-    reportedAt: "2024-01-20",
-    location: "789 Community Dr",
-    reportedBy: "Mike Wilson",
-    slaStatus: "overdue",
-  },
-  {
-    id: "4",
-    title: "Water Main Break",
-    description: "Water flooding the street",
-    status: "in_progress",
-    priority: "critical",
-    category: "water",
-    reportedAt: "2024-01-22",
-    location: "321 Water St",
-    reportedBy: "Sarah Johnson",
-    assignedOfficer: "Officer Davis",
-    slaStatus: "urgent",
-  },
-  {
-    id: "5",
-    title: "Noise Complaint",
-    description: "Construction noise during restricted hours",
-    status: "pending",
-    priority: "medium",
-    category: "noise",
-    reportedAt: "2024-01-21",
-    location: "654 Quiet Ave",
-    reportedBy: "Bob Brown",
-    slaStatus: "on_time",
-  },
-];
-
-const mockOfficers = [
-  {
-    id: "1",
-    name: "Officer Johnson",
-    department: "Public Works",
-    activeIssues: 3,
-  },
-  { id: "2", name: "Officer Smith", department: "Utilities", activeIssues: 2 },
-  {
-    id: "3",
-    name: "Officer Davis",
-    department: "Emergency Services",
-    activeIssues: 1,
-  },
-  {
-    id: "4",
-    name: "Officer Wilson",
-    department: "Parks & Recreation",
-    activeIssues: 0,
-  },
-];
+const supabase = createClient();
 
 const getStatusIcon = (status: string) => {
   switch (status) {
@@ -135,7 +45,7 @@ const getStatusIcon = (status: string) => {
     case "pending":
       return <AlertCircle className="w-4 h-4 text-red-600" />;
     default:
-      return <XCircle className="w-4 h-4 text-gray-600" />;
+      return null;
   }
 };
 
@@ -152,7 +62,7 @@ const getStatusColor = (status: string) => {
   }
 };
 
-const getPriorityColor = (priority: string) => {
+const getPriorityColor = (priority: string | null) => {
   switch (priority) {
     case "critical":
       return "bg-red-600 text-white";
@@ -167,122 +77,232 @@ const getPriorityColor = (priority: string) => {
   }
 };
 
-const getSlaColor = (slaStatus: string) => {
-  switch (slaStatus) {
-    case "completed":
-      return "bg-green-100 text-green-800";
-    case "on_time":
-      return "bg-blue-100 text-blue-800";
-    case "urgent":
-      return "bg-orange-100 text-orange-800";
-    case "overdue":
-      return "bg-red-100 text-red-800";
-    default:
-      return "bg-gray-100 text-gray-800";
-  }
+const getSlaStatus = (deadline: string | null) => {
+  if (!deadline) return { text: "No SLA", color: "bg-gray-100 text-gray-800" };
+  const hoursLeft =
+    (new Date(deadline).getTime() - Date.now()) / (1000 * 60 * 60);
+  if (hoursLeft < 0)
+    return { text: "Overdue", color: "bg-red-100 text-red-800" };
+  if (hoursLeft < 24)
+    return { text: "Due Soon", color: "bg-orange-100 text-orange-800" };
+  return { text: "On Time", color: "bg-green-100 text-green-800" };
 };
 
 export function OfficerDashboard() {
   const { user } = useAuth();
-  const [issues, setIssues] = useState(mockAllIssues);
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [filterPriority, setFilterPriority] = useState("all");
-  const [searchTerm, setSearchTerm] = useState("");
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
+  const [updateMessage, setUpdateMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const filteredIssues = issues.filter((issue) => {
-    const matchesStatus =
-      filterStatus === "all" || issue.status === filterStatus;
-    const matchesPriority =
-      filterPriority === "all" || issue.priority === filterPriority;
-    const matchesSearch =
-      searchTerm === "" ||
-      issue.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      issue.location.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      issue.reportedBy.toLowerCase().includes(searchTerm.toLowerCase());
+  useEffect(() => {
+    if (!user) return;
 
-    return matchesStatus && matchesPriority && matchesSearch;
-  });
+    const fetchIssues = async () => {
+      setIsLoading(true);
+      setError(null);
 
-  const assignOfficer = (issueId: string, officerId: string) => {
-    const officer = mockOfficers.find((o) => o.id === officerId);
-    setIssues((prev) =>
-      prev.map((issue) =>
-        issue.id === issueId
-          ? {
-              ...issue,
-              assignedOfficer: officer?.name || "",
-              status: "in_progress",
-            }
-          : issue
+      const { data, error } = await supabase
+        .from("issues")
+        .select(
+          `
+          id,
+          title,
+          description,
+          category,
+          priority,
+          location,
+          coordinates,
+          status,
+          reported_at,
+          sla_deadline,
+          reported_by:profiles!fk_issues_reported_by (full_name),
+          assigned_to:profiles!fk_issues_assigned_to (full_name)
+  `
+        )
+        .eq("assigned_to", user.id)
+        .order("sla_deadline", { ascending: true });
+
+      if (error) {
+        console.error(error);
+        setError(error.message);
+        setIsLoading(false);
+        return;
+      }
+
+      const formattedIssues: Issue[] = (data || []).map((i) => {
+        const status = i.status as "pending" | "in_progress" | "resolved";
+        return {
+          ...i,
+          coordinates: i.coordinates ? JSON.parse(i.coordinates) : null,
+          reported_by: Array.isArray(i.reported_by)
+            ? i.reported_by[0] ?? null
+            : null,
+          assigned_to: Array.isArray(i.assigned_to)
+            ? i.assigned_to[0] ?? null
+            : null,
+          status,
+        };
+      });
+
+      setIssues(formattedIssues);
+      setIsLoading(false);
+    };
+
+    fetchIssues();
+
+    // === REALTIME: ISSUES ===
+    const channel = supabase
+      .channel("officer_issues")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "issues",
+          filter: `assigned_to=eq.${user.id}`,
+        },
+        (payload) => {
+          const newIssue = payload.new as {
+            id: string;
+            title: string;
+            description: string | null;
+            category: string | null;
+            priority: string | null;
+            location: string | null;
+            coordinates: string | null;
+            status: string;
+            reported_at: string;
+            sla_deadline: string | null;
+            reported_by?: { full_name: string }[] | null;
+            assigned_to?: { full_name: string }[] | null;
+          };
+
+          const status = newIssue.status as
+            | "pending"
+            | "in_progress"
+            | "resolved";
+
+          const formatted: Issue = {
+            ...newIssue,
+            coordinates: newIssue.coordinates
+              ? JSON.parse(newIssue.coordinates)
+              : null,
+            reported_by: Array.isArray(newIssue.reported_by)
+              ? newIssue.reported_by[0] ?? null
+              : null,
+            assigned_to: Array.isArray(newIssue.assigned_to)
+              ? newIssue.assigned_to[0] ?? null
+              : null,
+            status,
+          };
+
+          if (payload.eventType === "INSERT") {
+            setIssues((prev) => [formatted, ...prev]);
+          } else if (payload.eventType === "UPDATE") {
+            setIssues((prev) =>
+              prev.map((i) => (i.id === formatted.id ? formatted : i))
+            );
+          } else if (payload.eventType === "DELETE") {
+            setIssues((prev) => prev.filter((i) => i.id !== payload.old.id));
+          }
+        }
       )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
+  const updateStatus = async (issueId: string, status: string) => {
+    const { error } = await supabase
+      .from("issues")
+      .update({ status })
+      .eq("id", issueId);
+
+    if (error) alert("Update failed: " + error.message);
+  };
+
+  const addUpdate = async () => {
+    if (!updateMessage.trim() || !selectedIssueId || !user?.id) return;
+
+    const { error } = await supabase.from("issue_updates").insert({
+      issue_id: selectedIssueId,
+      user_id: user.id,
+      message: updateMessage,
+    });
+
+    if (error) alert("Failed to add update: " + error.message);
+    else setUpdateMessage("");
+  };
+
+  const getDirections = (coords: { lat: number; lng: number }) => {
+    window.open(
+      `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`,
+      "_blank"
     );
   };
 
-  const updateIssueStatus = (issueId: string, newStatus: string) => {
-    setIssues((prev) =>
-      prev.map((issue) =>
-        issue.id === issueId ? { ...issue, status: newStatus } : issue
-      )
-    );
-  };
-
-  // Statistics
+  const selectedIssue = issues.find((i) => i.id === selectedIssueId);
   const stats = {
     total: issues.length,
     pending: issues.filter((i) => i.status === "pending").length,
     inProgress: issues.filter((i) => i.status === "in_progress").length,
-    resolved: issues.filter((i) => i.status === "resolved").length,
-    overdue: issues.filter((i) => i.slaStatus === "overdue").length,
+    overdue: issues.filter(
+      (i) => i.sla_deadline && new Date(i.sla_deadline) < new Date()
+    ).length,
   };
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-lg text-gray-600">Please log in as an officer.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-4">
-              <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center">
                 <MapPin className="w-5 h-5 text-white" />
               </div>
               <h1 className="text-xl font-semibold text-gray-900">
-                City Snap Admin
+                Officer Dashboard
               </h1>
             </div>
-
-            <div className="flex items-center space-x-4">
-              <Button variant="ghost" size="sm">
-                <Bell className="w-4 h-4" />
-              </Button>
-            </div>
+            <Button variant="ghost" size="sm">
+              <Bell className="w-4 h-4" />
+            </Button>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">
-            Admin Dashboard
+            Welcome back, {user.user_metadata?.full_name || "Officer"}
           </h2>
-          <p className="text-gray-600">
-            Monitor and manage all civic issues across the city
-          </p>
+          <p className="text-gray-600">Manage your assigned issues</p>
         </div>
 
-        {/* Statistics Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center space-x-4">
                 <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <BarChart3 className="w-6 h-6 text-blue-600" />
+                  <Target className="w-6 h-6 text-blue-600" />
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-gray-900">
                     {stats.total}
                   </p>
-                  <p className="text-sm text-gray-600">Total Issues</p>
+                  <p className="text-sm text-gray-600">Total</p>
                 </div>
               </div>
             </CardContent>
@@ -323,24 +343,8 @@ export function OfficerDashboard() {
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-                  <CheckCircle className="w-6 h-6 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {stats.resolved}
-                  </p>
-                  <p className="text-sm text-gray-600">Resolved</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center space-x-4">
                 <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
-                  <AlertTriangle className="w-6 h-6 text-orange-600" />
+                  <Timer className="w-6 h-6 text-orange-600" />
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-gray-900">
@@ -353,280 +357,205 @@ export function OfficerDashboard() {
           </Card>
         </div>
 
-        <Tabs defaultValue="issues" className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="issues">Issue Management</TabsTrigger>
-            <TabsTrigger value="map">Map View</TabsTrigger>
-            <TabsTrigger value="officers">Officer Management</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
-            <TabsTrigger value="audit">Audit & Security</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="issues">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2">
             <Card>
               <CardHeader>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <CardTitle>All Issues</CardTitle>
-                    <CardDescription>
-                      Manage and assign civic issues to officers
-                    </CardDescription>
+                <CardTitle>Assigned Issues</CardTitle>
+                <CardDescription>Click to view details</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? (
+                  <p className="text-center py-8 text-gray-500">Loading...</p>
+                ) : error ? (
+                  <p className="text-center py-8 text-red-600">{error}</p>
+                ) : issues.length === 0 ? (
+                  <p className="text-center py-8 text-gray-500">
+                    No issues assigned.
+                  </p>
+                ) : (
+                  <div className="space-y-4">
+                    {issues.map((issue) => {
+                      const sla = getSlaStatus(issue.sla_deadline ?? "");
+                      return (
+                        <div
+                          key={issue.id}
+                          className={`border rounded-lg p-4 cursor-pointer transition-colors ${
+                            selectedIssueId === issue.id
+                              ? "bg-blue-50 border-blue-200"
+                              : "hover:bg-gray-50"
+                          }`}
+                          onClick={() => setSelectedIssueId(issue.id)}
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex flex-wrap items-center gap-2 mb-2">
+                                {getStatusIcon(issue.status)}
+                                <h3 className="font-semibold text-gray-900">
+                                  {issue.title}
+                                </h3>
+                                <Badge className={getStatusColor(issue.status)}>
+                                  {issue.status.replace("_", " ")}
+                                </Badge>
+                                <Badge
+                                  className={getPriorityColor(issue.priority)}
+                                >
+                                  {issue.priority}
+                                </Badge>
+                                {sla.text !== "No SLA" && (
+                                  <Badge className={sla.color}>
+                                    {sla.text}
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-gray-600 mb-2">
+                                {issue.description}
+                              </p>
+                              <div className="flex flex-wrap gap-4 text-sm text-gray-500">
+                                <span className="flex items-center gap-1">
+                                  <MapPin className="w-3 h-3" />
+                                  {issue.location}
+                                </span>
+                                {issue.sla_deadline && (
+                                  <span className="flex items-center gap-1">
+                                    <Calendar className="w-3 h-3" />
+                                    Due:{" "}
+                                    {new Date(
+                                      issue.sla_deadline
+                                    ).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {issue.coordinates && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  getDirections(issue.coordinates!);
+                                }}
+                              >
+                                <Navigation className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="flex space-x-2">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                      <Input
-                        placeholder="Search issues..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="pl-10 w-64"
-                      />
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div>
+            {selectedIssue ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Issue Details</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-2">
+                      {selectedIssue.title}
+                    </h3>
+                    <p className="text-gray-600 mb-4">
+                      {selectedIssue.description}
+                    </p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Reported by:</span>
+                        <span className="font-medium">
+                          {selectedIssue.reported_by?.full_name || "Unknown"}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Location:</span>
+                        <span className="font-medium">
+                          {selectedIssue.location}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">SLA:</span>
+                        <span className="font-medium">
+                          {selectedIssue.sla_deadline
+                            ? new Date(
+                                selectedIssue.sla_deadline
+                              ).toLocaleDateString()
+                            : "None"}
+                        </span>
+                      </div>
                     </div>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <h4 className="font-medium text-gray-900 mb-2">
+                      Update Status
+                    </h4>
                     <Select
-                      value={filterStatus}
-                      onValueChange={setFilterStatus}
+                      value={selectedIssue.status}
+                      onValueChange={(v) => updateStatus(selectedIssue.id, v)}
                     >
-                      <SelectTrigger className="w-32">
+                      <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">All Status</SelectItem>
                         <SelectItem value="pending">Pending</SelectItem>
                         <SelectItem value="in_progress">In Progress</SelectItem>
                         <SelectItem value="resolved">Resolved</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Select
-                      value={filterPriority}
-                      onValueChange={setFilterPriority}
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <h4 className="font-medium text-gray-900 mb-2">
+                      Add Update
+                    </h4>
+                    <Textarea
+                      placeholder="Add progress note..."
+                      value={updateMessage}
+                      onChange={(e) => setUpdateMessage(e.target.value)}
+                      rows={3}
+                    />
+                    <Button
+                      className="mt-2 w-full"
+                      onClick={addUpdate}
+                      disabled={!updateMessage.trim()}
                     >
-                      <SelectTrigger className="w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Priority</SelectItem>
-                        <SelectItem value="critical">Critical</SelectItem>
-                        <SelectItem value="high">High</SelectItem>
-                        <SelectItem value="medium">Medium</SelectItem>
-                        <SelectItem value="low">Low</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      Send Update
+                    </Button>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {filteredIssues.map((issue) => (
-                    <div
-                      key={issue.id}
-                      className="border rounded-lg p-4 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2 mb-2">
-                            {getStatusIcon(issue.status)}
-                            <h3 className="font-semibold text-gray-900">
-                              {issue.title}
-                            </h3>
-                            <Badge className={getStatusColor(issue.status)}>
-                              {issue.status.replace("_", " ")}
-                            </Badge>
-                            <Badge className={getPriorityColor(issue.priority)}>
-                              {issue.priority}
-                            </Badge>
-                            <Badge className={getSlaColor(issue.slaStatus)}>
-                              {issue.slaStatus.replace("_", " ")}
-                            </Badge>
-                          </div>
-                          <p className="text-gray-600 mb-2">
-                            {issue.description}
-                          </p>
-                          <div className="flex items-center space-x-4 text-sm text-gray-500">
-                            <span className="flex items-center space-x-1">
-                              <MapPin className="w-3 h-3" />
-                              <span>{issue.location}</span>
-                            </span>
-                            <span className="flex items-center space-x-1">
-                              <Calendar className="w-3 h-3" />
-                              <span>{issue.reportedAt}</span>
-                            </span>
-                            <span>Reported by: {issue.reportedBy}</span>
-                            {issue.assignedOfficer && (
-                              <span>Assigned to: {issue.assignedOfficer}</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex space-x-2 ml-4">
-                          {!issue.assignedOfficer && (
-                            <Select
-                              onValueChange={(value) =>
-                                assignOfficer(issue.id, value)
-                              }
-                            >
-                              <SelectTrigger className="w-40">
-                                <SelectValue placeholder="Assign Officer" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {mockOfficers.map((officer) => (
-                                  <SelectItem
-                                    key={officer.id}
-                                    value={officer.id}
-                                  >
-                                    {officer.name} ({officer.activeIssues}{" "}
-                                    active)
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          )}
-                          <Select
-                            value={issue.status}
-                            onValueChange={(value) =>
-                              updateIssueStatus(issue.id, value)
-                            }
-                          >
-                            <SelectTrigger className="w-32">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="pending">Pending</SelectItem>
-                              <SelectItem value="in_progress">
-                                In Progress
-                              </SelectItem>
-                              <SelectItem value="resolved">Resolved</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
+
+                  {selectedIssue.coordinates && (
+                    <div className="border-t pt-4">
+                      <Button
+                        variant="outline"
+                        className="w-full"
+                        onClick={() =>
+                          getDirections(selectedIssue.coordinates!)
+                        }
+                      >
+                        <Navigation className="w-4 h-4 mr-2" />
+                        Get Directions
+                      </Button>
                     </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="map">
-            <Card>
-              <CardHeader>
-                <CardTitle>Map View</CardTitle>
-                <CardDescription>
-                  Geographic visualization of all reported issues
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="h-96 bg-gray-100 rounded-lg flex items-center justify-center">
-                  <div className="text-center">
-                    <Map className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600">
-                      Interactive map would be displayed here
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      Showing {filteredIssues.length} issues on the map
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="officers">
-            <Card>
-              <CardHeader>
-                <CardTitle>Officer Management</CardTitle>
-                <CardDescription>
-                  Manage officer assignments and workload
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {mockOfficers.map((officer) => (
-                    <Card key={officer.id}>
-                      <CardContent className="p-4">
-                        <div className="flex items-center space-x-3">
-                          <Avatar>
-                            <AvatarFallback>
-                              {officer.name.split(" ")[1]?.charAt(0)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1">
-                            <h3 className="font-semibold text-gray-900">
-                              {officer.name}
-                            </h3>
-                            <p className="text-sm text-gray-600">
-                              {officer.department}
-                            </p>
-                            <div className="flex items-center space-x-2 mt-2">
-                              <Badge variant="outline">
-                                {officer.activeIssues} active issues
-                              </Badge>
-                            </div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="analytics">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Issue Trends</CardTitle>
-                  <CardDescription>
-                    Monthly issue reporting trends
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-64 bg-gray-100 rounded-lg flex items-center justify-center">
-                    <div className="text-center">
-                      <TrendingUp className="w-12 h-12 text-gray-400 mx-auto mb-2" />
-                      <p className="text-gray-600">
-                        Chart visualization would be here
-                      </p>
-                    </div>
-                  </div>
+                  )}
                 </CardContent>
               </Card>
-
+            ) : (
               <Card>
-                <CardHeader>
-                  <CardTitle>Category Breakdown</CardTitle>
-                  <CardDescription>Issues by category</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {["Roads", "Lighting", "Water", "Vandalism", "Noise"].map(
-                      (category, index) => (
-                        <div
-                          key={category}
-                          className="flex items-center justify-between"
-                        >
-                          <span className="text-sm font-medium">
-                            {category}
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-24 bg-gray-200 rounded-full h-2">
-                              <div
-                                className="bg-blue-600 h-2 rounded-full"
-                                style={{ width: `${Math.random() * 100}%` }}
-                              />
-                            </div>
-                            <span className="text-sm text-gray-600">
-                              {Math.floor(Math.random() * 20) + 1}
-                            </span>
-                          </div>
-                        </div>
-                      )
-                    )}
-                  </div>
+                <CardContent className="p-8 text-center">
+                  <Target className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <p className="text-gray-600">
+                    Select an issue to view details
+                  </p>
                 </CardContent>
               </Card>
-            </div>
-          </TabsContent>
-        </Tabs>
+            )}
+          </div>
+        </div>
       </main>
     </div>
   );

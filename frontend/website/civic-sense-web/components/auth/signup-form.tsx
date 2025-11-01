@@ -1,5 +1,11 @@
 "use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useForm, Controller } from "react-hook-form";
+import { createClient } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
+
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -8,56 +14,85 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Controller, useForm } from "react-hook-form";
-import { createClient } from "@/utils/supabase/client";
-import { Select, SelectContent, SelectItem, SelectValue } from "../ui/select";
-import { useRouter } from "next/navigation";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/components/ui/select";
 import dynamic from "next/dynamic";
+
+const SafeSelectTrigger = dynamic(
+  () => import("@/components/ui/select").then((mod) => mod.SelectTrigger),
+  { ssr: false }
+);
 
 type FormSchema = {
   name: string;
   email: string;
-  role: string;
+  role: "user" | "worker" | "officer";
   password: string;
   confirmPassword: string;
 };
-
-const SafeSelectTrigger = dynamic(
-  () => import("../ui/select").then((mod) => mod.SelectTrigger),
-  {
-    ssr: false,
-  }
-);
 
 export function SignupForm({
   className,
   ...props
 }: React.ComponentProps<"form">) {
   const router = useRouter();
-  const form = useForm<FormSchema>();
   const supabase = createClient();
 
-  const submit = async (formData: FormSchema) => {
-    const { name, email, role, password, confirmPassword } = formData;
+  const {
+    register,
+    handleSubmit,
+    control,
+    formState: { errors, isSubmitting },
+    setError,
+    clearErrors,
+  } = useForm<FormSchema>({
+    defaultValues: {
+      role: "user",
+    },
+  });
 
-    if (password === confirmPassword) {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
+  const [serverError, setServerError] = useState<string | null>(null);
+
+  const onSubmit = async (data: FormSchema) => {
+    clearErrors();
+    setServerError(null);
+
+    // Front-end validation (extra safety)
+    if (data.password.length < 8) {
+      setError("password", {
+        message: "Password must be at least 8 characters",
+      });
+      return;
+    }
+    if (data.password !== data.confirmPassword) {
+      setError("confirmPassword", { message: "Passwords do not match" });
+      return;
+    }
+
+    try {
+      const { error } = await supabase.auth.signUp({
+        email: data.email,
+        password: data.password,
         options: {
           data: {
-            role: role,
-            full_name: name,
+            full_name: data.name.trim(),
+            role: data.role,
           },
         },
       });
 
-      if (error) {
-        console.error("Error signing up:", error);
-      } else {
-        console.log("User signed up successfully:", data);
-        router.push("/dashboard");
-      }
+      if (error) throw error;
+
+      // Success → go to dashboard (or confirmation page)
+      router.push("/dashboard/user");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Signup failed";
+      console.error("Signup error:", err);
+      setServerError(message);
     }
   };
 
@@ -65,7 +100,7 @@ export function SignupForm({
     <form
       className={cn("flex flex-col gap-6", className)}
       {...props}
-      onSubmit={form.handleSubmit(submit)}
+      onSubmit={handleSubmit(onSubmit)}
     >
       <FieldGroup>
         <div className="flex flex-col items-center gap-1 text-center">
@@ -74,38 +109,64 @@ export function SignupForm({
             Fill in the form below to create your account
           </p>
         </div>
+
+        {/* Full Name */}
         <Field>
           <FieldLabel htmlFor="name">Full Name</FieldLabel>
           <Input
             id="name"
             type="text"
             placeholder="John Doe"
-            required
-            {...form.register("name")}
+            {...register("name", { required: "Full name is required" })}
+            disabled={isSubmitting}
           />
+          {errors.name && (
+            <FieldDescription className="text-destructive">
+              {errors.name.message}
+            </FieldDescription>
+          )}
         </Field>
+
+        {/* Email */}
         <Field>
           <FieldLabel htmlFor="email">Email</FieldLabel>
           <Input
             id="email"
             type="email"
             placeholder="m@example.com"
-            required
-            {...form.register("email")}
+            {...register("email", {
+              required: "Email is required",
+              pattern: {
+                value: /^\S+@\S+$/i,
+                message: "Invalid email address",
+              },
+            })}
+            disabled={isSubmitting}
           />
+          {errors.email && (
+            <FieldDescription className="text-destructive">
+              {errors.email.message}
+            </FieldDescription>
+          )}
           <FieldDescription>
             We&apos;ll use this to contact you. We will not share your email
             with anyone else.
           </FieldDescription>
         </Field>
+
+        {/* Role */}
         <Field>
           <FieldLabel>Role</FieldLabel>
           <Controller
-            control={form.control}
+            control={control}
             name="role"
-            rules={{ required: true }}
+            rules={{ required: "Please select a role" }}
             render={({ field }) => (
-              <Select onValueChange={field.onChange} value={field.value}>
+              <Select
+                onValueChange={field.onChange}
+                value={field.value}
+                disabled={isSubmitting}
+              >
                 <SafeSelectTrigger>
                   <SelectValue placeholder="Select a role" />
                 </SafeSelectTrigger>
@@ -117,35 +178,75 @@ export function SignupForm({
               </Select>
             )}
           />
+          {errors.role && (
+            <FieldDescription className="text-destructive">
+              {errors.role.message}
+            </FieldDescription>
+          )}
           <FieldDescription>
             Choose the role that best describes you.
           </FieldDescription>
         </Field>
+
+        {/* Password */}
         <Field>
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
             id="password"
             type="password"
-            required
-            {...form.register("password")}
+            {...register("password", {
+              required: "Password is required",
+              minLength: {
+                value: 8,
+                message: "Password must be at least 8 characters",
+              },
+            })}
+            disabled={isSubmitting}
           />
+          {errors.password && (
+            <FieldDescription className="text-destructive">
+              {errors.password.message}
+            </FieldDescription>
+          )}
           <FieldDescription>
             Must be at least 8 characters long.
           </FieldDescription>
         </Field>
+
+        {/* Confirm Password */}
         <Field>
           <FieldLabel htmlFor="confirm-password">Confirm Password</FieldLabel>
           <Input
             id="confirm-password"
             type="password"
-            required
-            {...form.register("confirmPassword")}
+            {...register("confirmPassword", {
+              required: "Please confirm your password",
+            })}
+            disabled={isSubmitting}
           />
+          {errors.confirmPassword && (
+            <FieldDescription className="text-destructive">
+              {errors.confirmPassword.message}
+            </FieldDescription>
+          )}
           <FieldDescription>Please confirm your password.</FieldDescription>
         </Field>
+
+        {/* Server error */}
+        {serverError && (
+          <FieldDescription className="text-destructive text-center">
+            {serverError}
+          </FieldDescription>
+        )}
+
+        {/* Submit */}
         <Field>
-          <Button type="submit">Create Account</Button>
+          <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? "Creating account…" : "Create Account"}
+          </Button>
         </Field>
+
+        {/* Login link */}
         <Field>
           <FieldDescription className="px-6 text-center">
             Already have an account?{" "}

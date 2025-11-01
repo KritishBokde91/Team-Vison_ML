@@ -1,7 +1,6 @@
 "use client";
 
 import type React from "react";
-
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,12 +23,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { X, MapPin, Upload } from "lucide-react";
 import Image from "next/image";
-import { Issue } from "@/types/issue";
+import { createClient } from "@/utils/supabase/client";
+import type { Issue } from "@/types/issue";
 
 interface IssueReportFormProps {
   onClose: () => void;
   onSubmit: (issue: Issue) => void;
 }
+
+const supabase = createClient();
 
 const categories = [
   {
@@ -74,23 +76,56 @@ const priorities = [
 ];
 
 export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    title: string;
+    description: string;
+    category: string;
+    priority: string;
+    location: string;
+    coordinates: { lat: number; lng: number } | null;
+    images: File[];
+  }>({
     title: "",
     description: "",
     category: "",
     priority: "medium",
     location: "",
-    coordinates: { lat: 0, lng: 0 },
-    images: [] as File[],
+    coordinates: null,
+    images: [],
   });
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const imagePreviews = formData.images.map((file) =>
+    URL.createObjectURL(file)
+  );
+
+  const getCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert("Geolocation not supported.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        setFormData((prev) => ({
+          ...prev,
+          coordinates: { lat: latitude, lng: longitude },
+          location: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`,
+        }));
+      },
+      () => alert("Could not get location.")
+    );
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).slice(0, 3);
     setFormData((prev) => ({
       ...prev,
-      images: [...prev.images, ...files].slice(0, 3), // Max 3 images
+      images: [...prev.images, ...files].slice(0, 3),
     }));
   };
 
@@ -101,74 +136,143 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
     }));
   };
 
-  const getCurrentLocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setFormData((prev) => ({
-            ...prev,
-            coordinates: {
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            },
-            location: `${position.coords.latitude.toFixed(
-              6
-            )}, ${position.coords.longitude.toFixed(6)}`,
-          }));
-        },
-        (error) => {
-          console.error("Error getting location:", error);
-        }
-      );
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      !formData.title ||
+      !formData.category ||
+      !formData.description ||
+      !formData.location
+    ) {
+      alert("Please fill all required fields.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setUploadError(null);
+
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData.user?.id;
+      if (!userId) throw new Error("Not authenticated");
+
+      const imageUrls: string[] = [];
+      for (const file of formData.images) {
+        const fileExt = file.name.split(".").pop() || "jpg";
+        const fileName = `${crypto.randomUUID()}.${fileExt}`;
+        const filePath = `public/${fileName}`;
+
+        const { error } = await supabase.storage
+          .from("issue-images")
+          .upload(filePath, file);
+
+        if (error) throw error;
+
+        const { data } = supabase.storage
+          .from("issue-images")
+          .getPublicUrl(filePath);
+        imageUrls.push(data.publicUrl);
+      }
+
+      const { data: newRow, error: insertError } = await supabase
+        .from("issues")
+        .insert({
+          title: formData.title,
+          description: formData.description,
+          category: formData.category,
+          priority: formData.priority,
+          location: formData.location,
+          coordinates: formData.coordinates
+            ? JSON.stringify(formData.coordinates)
+            : null,
+          images: imageUrls.length > 0 ? imageUrls : null,
+          reported_by: userId,
+          status: "pending" as const,
+        })
+        .select(
+          `
+          id,
+          title,
+          description,
+          category,
+          priority,
+          location,
+          coordinates,
+          images,
+          status,
+          reported_at,
+          reported_by (full_name),
+          assigned_to (full_name)
+        `
+        )
+        .single();
+
+      if (insertError) throw insertError;
+
+      // Type-safe parsing
+      const coordinates = newRow.coordinates
+        ? JSON.parse(newRow.coordinates)
+        : null;
+      const reported_by = Array.isArray(newRow.reported_by)
+        ? newRow.reported_by[0] ?? null
+        : null;
+      const assigned_to = Array.isArray(newRow.assigned_to)
+        ? newRow.assigned_to[0] ?? null
+        : null;
+
+      const issue: Issue = {
+        id: newRow.id,
+        title: newRow.title,
+        description: newRow.description,
+        category: newRow.category,
+        priority: newRow.priority,
+        location: newRow.location,
+        coordinates,
+        images: newRow.images,
+        status: newRow.status as "pending" | "in_progress" | "resolved",
+        reported_at: newRow.reported_at,
+        reported_by,
+        assigned_to,
+      };
+
+      onSubmit(issue);
+      onClose();
+    } catch (err) {
+      const error = err as Error;
+      setUploadError(error.message || "Failed to submit.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    const newIssue = {
-      id: Date.now().toString(),
-      ...formData,
-      status: "pending",
-      reportedAt: new Date().toISOString().split("T")[0],
-      reportedBy: "Current User",
-    };
-
-    onSubmit(newIssue);
-    setIsSubmitting(false);
-    onClose();
-  };
-
   const selectedCategory = categories.find(
-    (cat) => cat.value === formData.category
+    (c) => c.value === formData.category
   );
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
       <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
           <div>
             <CardTitle>Report Civic Issue</CardTitle>
-            <CardDescription>
-              Help improve your community by reporting issues
-            </CardDescription>
+            <CardDescription>Help improve your community</CardDescription>
           </div>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            disabled={isSubmitting}
+          >
             <X className="w-4 h-4" />
           </Button>
         </CardHeader>
 
         <CardContent>
-          {/* Progress Steps */}
           <div className="flex items-center justify-between mb-6">
             {[1, 2, 3].map((step) => (
               <div key={step} className="flex items-center">
                 <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
                     step <= currentStep
                       ? "bg-blue-600 text-white"
                       : "bg-gray-200 text-gray-600"
@@ -178,7 +282,7 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
                 </div>
                 {step < 3 && (
                   <div
-                    className={`w-16 h-1 mx-2 ${
+                    className={`w-16 h-1 mx-2 transition-colors ${
                       step < currentStep ? "bg-blue-600" : "bg-gray-200"
                     }`}
                   />
@@ -188,24 +292,21 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Step 1: Basic Information */}
+            {/* === STEP 1 === */}
             {currentStep === 1 && (
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold">Basic Information</h3>
-
                 <div className="space-y-2">
                   <Label htmlFor="title">Issue Title *</Label>
                   <Input
                     id="title"
-                    placeholder="Brief description of the issue"
+                    placeholder="e.g., Pothole on Main St"
                     value={formData.title}
                     onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        title: e.target.value,
-                      }))
+                      setFormData((p) => ({ ...p, title: e.target.value }))
                     }
                     required
+                    disabled={isSubmitting}
                   />
                 </div>
 
@@ -213,21 +314,18 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
                   <Label htmlFor="category">Category *</Label>
                   <Select
                     value={formData.category}
-                    onValueChange={(value: string) =>
-                      setFormData((prev) => ({ ...prev, category: value }))
+                    onValueChange={(v) =>
+                      setFormData((p) => ({ ...p, category: v }))
                     }
+                    disabled={isSubmitting}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select issue category" />
+                      <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
-                      {categories.map((category) => (
-                        <SelectItem key={category.value} value={category.value}>
-                          <div className="flex items-center space-x-2">
-                            <Badge className={category.color}>
-                              {category.label}
-                            </Badge>
-                          </div>
+                      {categories.map((c) => (
+                        <SelectItem key={c.value} value={c.value}>
+                          <Badge className={c.color}>{c.label}</Badge>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -235,23 +333,24 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="priority">Priority Level</Label>
+                  <Label htmlFor="priority">Priority</Label>
                   <Select
                     value={formData.priority}
-                    onValueChange={(value: string) =>
-                      setFormData((prev) => ({ ...prev, priority: value }))
+                    onValueChange={(v) =>
+                      setFormData((p) => ({ ...p, priority: v }))
                     }
+                    disabled={isSubmitting}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {priorities.map((priority) => (
-                        <SelectItem key={priority.value} value={priority.value}>
-                          <div className="space-y-1">
-                            <div className="font-medium">{priority.label}</div>
-                            <div className="text-sm text-gray-500">
-                              {priority.description}
+                      {priorities.map((p) => (
+                        <SelectItem key={p.value} value={p.value}>
+                          <div>
+                            <div className="font-medium">{p.label}</div>
+                            <div className="text-xs text-gray-500">
+                              {p.description}
                             </div>
                           </div>
                         </SelectItem>
@@ -264,7 +363,9 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
                   <Button
                     type="button"
                     onClick={() => setCurrentStep(2)}
-                    disabled={!formData.title || !formData.category}
+                    disabled={
+                      !formData.title || !formData.category || isSubmitting
+                    }
                   >
                     Next
                   </Button>
@@ -272,53 +373,52 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
               </div>
             )}
 
-            {/* Step 2: Details & Location */}
+            {/* === STEP 2 === */}
             {currentStep === 2 && (
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold">Details & Location</h3>
-
                 <div className="space-y-2">
-                  <Label htmlFor="description">Detailed Description *</Label>
+                  <Label htmlFor="description">Description *</Label>
                   <Textarea
                     id="description"
-                    placeholder="Provide detailed information about the issue..."
+                    placeholder="Describe the issue..."
                     rows={4}
                     value={formData.description}
-                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                      setFormData((prev) => ({
-                        ...prev,
+                    onChange={(e) =>
+                      setFormData((p) => ({
+                        ...p,
                         description: e.target.value,
                       }))
                     }
                     required
+                    disabled={isSubmitting}
                   />
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="location">Location *</Label>
-                  <div className="flex space-x-2">
+                  <div className="flex gap-2">
                     <Input
                       id="location"
-                      placeholder="Enter address or description"
+                      placeholder="Address or landmark"
                       value={formData.location}
                       onChange={(e) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          location: e.target.value,
-                        }))
+                        setFormData((p) => ({ ...p, location: e.target.value }))
                       }
                       required
+                      disabled={isSubmitting}
                     />
                     <Button
                       type="button"
                       variant="outline"
                       onClick={getCurrentLocation}
+                      disabled={isSubmitting}
                     >
                       <MapPin className="w-4 h-4" />
                     </Button>
                   </div>
-                  <p className="text-sm text-gray-500">
-                    Click the map icon to use your current location
+                  <p className="text-xs text-gray-500">
+                    Use GPS or type manually
                   </p>
                 </div>
 
@@ -327,13 +427,18 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
                     type="button"
                     variant="outline"
                     onClick={() => setCurrentStep(1)}
+                    disabled={isSubmitting}
                   >
                     Back
                   </Button>
                   <Button
                     type="button"
                     onClick={() => setCurrentStep(3)}
-                    disabled={!formData.description || !formData.location}
+                    disabled={
+                      !formData.description ||
+                      !formData.location ||
+                      isSubmitting
+                    }
                   >
                     Next
                   </Button>
@@ -341,52 +446,52 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
               </div>
             )}
 
-            {/* Step 3: Photos & Review */}
+            {/* === STEP 3 === */}
             {currentStep === 3 && (
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold">Photos & Review</h3>
 
                 <div className="space-y-2">
-                  <Label>Upload Photos (Optional)</Label>
+                  <Label>Upload Photos (up to 3)</Label>
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
                     <input
                       type="file"
                       accept="image/*"
                       multiple
-                      onChange={handleImageUpload}
+                      onChange={handleImageChange}
                       className="hidden"
                       id="image-upload"
+                      disabled={isSubmitting}
                     />
                     <label htmlFor="image-upload" className="cursor-pointer">
                       <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                       <p className="text-sm text-gray-600">
-                        Click to upload images or drag and drop
+                        Click or drag images here
                       </p>
                       <p className="text-xs text-gray-500">
-                        Maximum 3 images, up to 5MB each
+                        Max 3 images, 5MB each
                       </p>
                     </label>
                   </div>
 
                   {formData.images.length > 0 && (
-                    <div className="grid grid-cols-3 gap-2 mt-4">
-                      {formData.images.map((image, index) => (
-                        <div key={index} className="relative">
+                    <div className="grid grid-cols-3 gap-2 mt-3">
+                      {formData.images.map((file, i) => (
+                        <div key={i} className="relative">
                           <Image
-                            width={1000}
-                            height={1000}
-                            src={
-                              URL.createObjectURL(image) || "/placeholder.svg"
-                            }
-                            alt={`Upload ${index + 1}`}
-                            className="w-full h-20 object-cover rounded-lg"
+                            src={imagePreviews[i]}
+                            alt="preview"
+                            width={80}
+                            height={80}
+                            className="w-full h-20 object-cover rounded"
                           />
                           <Button
                             type="button"
                             variant="destructive"
-                            size="sm"
+                            size="icon"
                             className="absolute -top-2 -right-2 w-6 h-6 rounded-full p-0"
-                            onClick={() => removeImage(index)}
+                            onClick={() => removeImage(i)}
+                            disabled={isSubmitting}
                           >
                             <X className="w-3 h-3" />
                           </Button>
@@ -396,33 +501,35 @@ export function IssueReportForm({ onClose, onSubmit }: IssueReportFormProps) {
                   )}
                 </div>
 
-                {/* Review Summary */}
-                <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-                  <h4 className="font-medium">Review Your Report</h4>
-                  <div className="space-y-1 text-sm">
-                    <p>
-                      <strong>Title:</strong> {formData.title}
-                    </p>
-                    <p>
-                      <strong>Category:</strong> {selectedCategory?.label}
-                    </p>
-                    <p>
-                      <strong>Priority:</strong> {formData.priority}
-                    </p>
-                    <p>
-                      <strong>Location:</strong> {formData.location}
-                    </p>
-                    <p>
-                      <strong>Images:</strong> {formData.images.length} uploaded
-                    </p>
-                  </div>
+                <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+                  <h4 className="font-medium">Review</h4>
+                  <p>
+                    <strong>Title:</strong> {formData.title}
+                  </p>
+                  <p>
+                    <strong>Category:</strong> {selectedCategory?.label}
+                  </p>
+                  <p>
+                    <strong>Priority:</strong> {formData.priority}
+                  </p>
+                  <p>
+                    <strong>Location:</strong> {formData.location}
+                  </p>
+                  <p>
+                    <strong>Images:</strong> {formData.images.length}
+                  </p>
                 </div>
+
+                {uploadError && (
+                  <p className="text-red-600 text-sm">{uploadError}</p>
+                )}
 
                 <div className="flex justify-between">
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => setCurrentStep(2)}
+                    disabled={isSubmitting}
                   >
                     Back
                   </Button>
