@@ -16,27 +16,27 @@ void main() async {
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpma2h1YWpxenNod2p0bmx6YWF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1ODA3ODUsImV4cCI6MjA3NzE1Njc4NX0.Wof0eYl2kM19zTslgaBpiK2yC2hsrocrMkvtCVNZa5M',
   );
 
-  // Request location permission at startup
-  await _requestLocationPermission();
+  // Request BOTH permissions at startup
+  await _requestPermissions();
 
   runApp(const MyApp());
 }
 
 // ---------------------------------------------------------------
-// GLOBAL: Request Location Permission at App Launch
+// GLOBAL: Request Location + Camera Permissions
 // ---------------------------------------------------------------
-Future<void> _requestLocationPermission() async {
-  final status = await Permission.locationWhenInUse.request();
+Future<void> _requestPermissions() async {
+  // Request Location
+  final locationStatus = await Permission.locationWhenInUse.request();
 
-  if (status.isDenied) {
-    // Show explanation
+  if (locationStatus.isDenied) {
     await _showPermissionDialog(
       title: 'Location Access Needed',
       content:
       'Civic Sense needs your location to show nearby issues and let you report problems accurately.',
       onRetry: () => openAppSettings(),
     );
-  } else if (status.isPermanentlyDenied) {
+  } else if (locationStatus.isPermanentlyDenied) {
     await _showPermissionDialog(
       title: 'Enable Location in Settings',
       content:
@@ -44,11 +44,29 @@ Future<void> _requestLocationPermission() async {
       onRetry: () => openAppSettings(),
     );
   }
-  // If granted → do nothing, app continues
+
+  // Request Camera
+  final cameraStatus = await Permission.camera.request();
+
+  if (cameraStatus.isDenied) {
+    await _showPermissionDialog(
+      title: 'Camera Access Needed',
+      content:
+      'Civic Sense needs camera access to let you take photos of civic issues like potholes.',
+      onRetry: () => openAppSettings(),
+    );
+  } else if (cameraStatus.isPermanentlyDenied) {
+    await _showPermissionDialog(
+      title: 'Enable Camera in Settings',
+      content:
+      'Please go to Settings → Apps → Civic Sense → Permissions and enable Camera.',
+      onRetry: () => openAppSettings(),
+    );
+  }
 }
 
 // ---------------------------------------------------------------
-// REUSABLE PERMISSION DIALOG
+// REUSABLE PERMISSION DIALOG (unchanged)
 // ---------------------------------------------------------------
 Future<void> _showPermissionDialog({
   required String title,
@@ -87,7 +105,7 @@ Future<void> _showPermissionDialog({
 }
 
 // ---------------------------------------------------------------
-// GLOBAL NAVIGATOR KEY (for dialog outside widget tree)
+// GLOBAL NAVIGATOR KEY
 // ---------------------------------------------------------------
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -99,7 +117,7 @@ class MyApp extends StatelessWidget {
     return Sizer(
       builder: (context, orientation, deviceType) {
         return MaterialApp(
-          navigatorKey: navigatorKey, // ← Important!
+          navigatorKey: navigatorKey,
           title: 'Civic Sense',
           debugShowCheckedModeBanner: false,
           theme: _buildLightTheme(),

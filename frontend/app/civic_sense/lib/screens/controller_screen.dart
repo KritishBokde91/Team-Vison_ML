@@ -5,6 +5,7 @@ import 'package:civic_sense/screens/report_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sizer/sizer.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -52,7 +53,6 @@ class _ControllerScreenState extends State<ControllerScreen>
     final primary = theme.primaryColor;
 
     return Scaffold(
-      extendBody: true,
       body: PageView(
         controller: _pageController,
         physics: const NeverScrollableScrollPhysics(),
@@ -110,8 +110,8 @@ class _SolidBottomBar extends StatelessWidget {
 
     return SafeArea(
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        height: 72,
+        margin: EdgeInsets.symmetric(horizontal: 5.w, vertical: 0),
+        height: 8.h,
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
           borderRadius: BorderRadius.circular(36),
