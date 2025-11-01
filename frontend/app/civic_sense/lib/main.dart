@@ -1,122 +1,333 @@
+import 'package:civic_sense/screens/controller_screen.dart';
+import 'package:civic_sense/screens/welcome_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:sizer/sizer.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Supabase
+  await Supabase.initialize(
+    url: 'https://zfkhuajqzshwjtnlzaaw.supabase.co',
+    anonKey:
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpma2h1YWpxenNod2p0bmx6YWF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1ODA3ODUsImV4cCI6MjA3NzE1Njc4NX0.Wof0eYl2kM19zTslgaBpiK2yC2hsrocrMkvtCVNZa5M',
+  );
+
+  // Request location permission at startup
+  await _requestLocationPermission();
+
   runApp(const MyApp());
 }
+
+// ---------------------------------------------------------------
+// GLOBAL: Request Location Permission at App Launch
+// ---------------------------------------------------------------
+Future<void> _requestLocationPermission() async {
+  final status = await Permission.locationWhenInUse.request();
+
+  if (status.isDenied) {
+    // Show explanation
+    await _showPermissionDialog(
+      title: 'Location Access Needed',
+      content:
+      'Civic Sense needs your location to show nearby issues and let you report problems accurately.',
+      onRetry: () => openAppSettings(),
+    );
+  } else if (status.isPermanentlyDenied) {
+    await _showPermissionDialog(
+      title: 'Enable Location in Settings',
+      content:
+      'Please go to Settings → Apps → Civic Sense → Permissions and enable Location.',
+      onRetry: () => openAppSettings(),
+    );
+  }
+  // If granted → do nothing, app continues
+}
+
+// ---------------------------------------------------------------
+// REUSABLE PERMISSION DIALOG
+// ---------------------------------------------------------------
+Future<void> _showPermissionDialog({
+  required String title,
+  required String content,
+  required VoidCallback onRetry,
+}) async {
+  final context = navigatorKey.currentContext;
+  if (context == null) return;
+
+  return showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: Text(title, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+      content: Text(content, style: GoogleFonts.poppins()),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: Text('Cancel', style: TextStyle(color: Colors.grey[600])),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            onRetry();
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF6C5CE7),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          child: Text('Open Settings', style: GoogleFonts.poppins(color: Colors.white)),
+        ),
+      ],
+    ),
+  );
+}
+
+// ---------------------------------------------------------------
+// GLOBAL NAVIGATOR KEY (for dialog outside widget tree)
+// ---------------------------------------------------------------
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+    return Sizer(
+      builder: (context, orientation, deviceType) {
+        return MaterialApp(
+          navigatorKey: navigatorKey, // ← Important!
+          title: 'Civic Sense',
+          debugShowCheckedModeBanner: false,
+          theme: _buildLightTheme(),
+          darkTheme: _buildDarkTheme(),
+          themeMode: ThemeMode.system,
+          home: const AuthWrapper(),
+        );
+      },
+    );
+  }
+
+  // ------------------------------------------------------------
+  // LIGHT THEME (unchanged)
+  // ------------------------------------------------------------
+  ThemeData _buildLightTheme() {
+    final base = ThemeData.light(useMaterial3: true);
+    return base.copyWith(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF6C5CE7),
+        brightness: Brightness.light,
+        primary: const Color(0xFF6C5CE7),
+        secondary: const Color(0xFF00D2B8),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      scaffoldBackgroundColor: const Color(0xFFF8F9FC),
+      cardColor: Colors.white,
+      appBarTheme: AppBarTheme(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        foregroundColor: const Color(0xFF2D3436),
+        titleTextStyle: GoogleFonts.poppins(
+          fontSize: 18.sp,
+          fontWeight: FontWeight.w600,
+          color: const Color(0xFF2D3436),
+        ),
+      ),
+      textTheme: GoogleFonts.robotoCondensedTextTheme(base.textTheme).apply(
+        bodyColor: const Color(0xFF2D3436),
+        displayColor: const Color(0xFF2D3436),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          elevation: 3,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 24),
+          textStyle: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.grey[50],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Colors.grey, width: 0.5),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Color(0xFF6C5CE7), width: 1.5),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------
+  // DARK THEME (unchanged)
+  // ------------------------------------------------------------
+  ThemeData _buildDarkTheme() {
+    final base = ThemeData.dark(useMaterial3: true);
+    return base.copyWith(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF6C5CE7),
+        brightness: Brightness.dark,
+        primary: const Color(0xFF6C5CE7),
+        secondary: const Color(0xFF00D2B8),
+        surface: const Color(0xFF121212),
+      ),
+      scaffoldBackgroundColor: const Color(0xFF0D0D0D),
+      cardColor: const Color(0xFF1E1E1E),
+      appBarTheme: AppBarTheme(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        foregroundColor: Colors.white,
+        titleTextStyle: GoogleFonts.poppins(
+          fontSize: 18.sp,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+        ),
+      ),
+      textTheme: GoogleFonts.poppinsTextTheme(base.textTheme).apply(
+        bodyColor: Colors.white,
+        displayColor: Colors.white,
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF6C5CE7),
+          elevation: 3,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 24),
+          textStyle: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: const Color(0xFF2D2D2D),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Color(0xFF444444), width: 0.5),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Color(0xFF6C5CE7), width: 1.5),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      ),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+// ==================================================================
+// AUTH WRAPPER – unchanged
+// ==================================================================
+class AuthWrapper extends StatefulWidget {
+  const AuthWrapper({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _AuthWrapperState extends State<AuthWrapper> {
+  late final Stream<bool> _authStream;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  @override
+  void initState() {
+    super.initState();
+    _authStream = Supabase.instance.client.auth.onAuthStateChange
+        .map((event) => event.session != null);
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    return StreamBuilder<bool>(
+      stream: _authStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const _LoadingScreen();
+        }
+        final isLoggedIn = snapshot.data ?? false;
+        return isLoggedIn ? const ControllerScreen() : const WelcomeScreen();
+      },
+    );
+  }
+}
+
+// ==================================================================
+// BEAUTIFUL LOADING SCREEN (unchanged)
+// ==================================================================
+class _LoadingScreen extends StatelessWidget {
+  const _LoadingScreen();
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF6C5CE7), Color(0xFF00D2B8)],
+          ),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Text(
+                    'CS',
+                    style: GoogleFonts.poppins(
+                      fontSize: 36,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF6C5CE7),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+              Text(
+                'Civic Sense',
+                style: GoogleFonts.poppins(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                strokeWidth: 3,
+              ),
+            ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
