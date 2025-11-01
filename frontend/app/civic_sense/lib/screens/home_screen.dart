@@ -519,10 +519,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ),
                           const SizedBox(height: 20),
-
-                          // Filter Tabs
                           _buildFilterTabs(),
-
                           const SizedBox(height: 20),
                         ],
                       ),

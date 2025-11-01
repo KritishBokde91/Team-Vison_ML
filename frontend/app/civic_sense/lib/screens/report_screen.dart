@@ -1,11 +1,15 @@
+import 'dart:convert';
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:sizer/sizer.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -19,13 +23,16 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
   final PageController _pageController = PageController();
   late AnimationController _submitAnimationController;
   late Animation<double> _submitAnimation;
+  final supabase = Supabase.instance.client;
+  final String submitReportUrl =
+      'https://zfkhuajqzshwjtnlzaaw.supabase.co/functions/v1/smooth-responder';
+  final dio = Dio();
 
-  // Form Data
   File? _image;
   String _title = '';
   String _description = '';
-  String _category = 'Pothole';
-  bool _isAtLocation = true;
+  String _category = 'Other';
+  bool _isAtLocation = false;
   LatLng? _location;
   bool _isLoadingLocation = false;
   String _locationError = '';
@@ -34,7 +41,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
     {'name': 'Pothole', 'icon': Icons.warning_amber_rounded},
     {'name': 'Graffiti', 'icon': Icons.palette_outlined},
     {'name': 'Fallen Tree', 'icon': Icons.park_outlined},
-    {'name': 'Broken Streetlight', 'icon': Icons.lightbulb_outline},
+    {'name': 'Damaged Road Sign', 'icon': Icons.lightbulb_outline},
     {'name': 'Garbage', 'icon': Icons.delete_outline},
     {'name': 'Water Leak', 'icon': Icons.water_drop_outlined},
     {'name': 'Other', 'icon': Icons.more_horiz},
@@ -65,7 +72,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
     final pickedFile = await picker.pickImage(
       source: source,
       imageQuality: 85,
-      preferredCameraDevice: CameraDevice.rear, // Use rear camera to avoid mirror effect
+      preferredCameraDevice: CameraDevice.rear,
     );
 
     if (pickedFile != null) {
@@ -148,10 +155,10 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 24),
         decoration: BoxDecoration(
-          color: Theme.of(context).primaryColor.withOpacity(0.1),
+          color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: Theme.of(context).primaryColor.withOpacity(0.3),
+            color: Theme.of(context).primaryColor.withValues(alpha: 0.3),
           ),
         ),
         child: Column(
@@ -206,7 +213,9 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
 
       // Get current position
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: LocationSettings(
+          accuracy: LocationAccuracy.high,
+        )
       );
 
       setState(() {
@@ -222,7 +231,50 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
     }
   }
 
-  void _nextStep() {
+  void _nextStep() async {
+    if (_currentStep == 0 && _image != null) {
+      setState(() => _isLoadingLocation = true);
+
+      try {
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('http://10.0.2.2:8080/upload-image'),
+        );
+        request.files.add(await http.MultipartFile.fromPath('file', _image!.path));
+
+        final streamedResponse = await request.send();
+        final response = await http.Response.fromStream(streamedResponse);
+
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body) as Map<String, dynamic>;
+          debugPrint(response.body);
+
+          final detections = json['detections'] as List<dynamic>? ?? [];
+          if (detections.isNotEmpty) {
+            final best = detections.cast<Map<String, dynamic>>().reduce((a, b) =>
+            (a['confidence'] as num) > (b['confidence'] as num) ? a : b);
+
+            final className = best['class_name'] as String;
+            final confidence = best['confidence'] as num;
+
+            if (confidence > 0.5) {
+              final pretty = className.replaceAll('_', ' ').split(' ').map((w) =>
+              '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
+              if (_categories.any((c) => c['name'] == pretty)) {
+                setState(() => _category = pretty);
+              }
+            }
+          }
+        } else {
+          debugPrint('Upload failed: ${response.statusCode} ${response.body}');
+        }
+      } catch (e) {
+        debugPrint('Upload error: $e');
+      } finally {
+        setState(() => _isLoadingLocation = false);
+      }
+    }
+
     if (_currentStep < 2) {
       _pageController.nextPage(
         duration: const Duration(milliseconds: 400),
@@ -242,57 +294,78 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
     }
   }
 
-  void _submitReport() {
-    // Show loading
+  Future<void> _submitReport() async {
+    // ----- VALIDATION -----
+    if (_image == null || _location == null || _title.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all required fields')),
+      );
+      return;
+    }
+
+    // ----- SHOW LOADING -----
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(
-                color: Theme.of(context).primaryColor,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Submitting report...',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-        ),
-      ),
+      builder: (_) => const Center(child: CircularProgressIndicator()),
     );
 
-    // TODO: Add Supabase API call here
-    Future.delayed(const Duration(seconds: 2), () {
-      Navigator.pop(context); // Close loading dialog
+    try {
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
 
-      // Reset form
+      // Upload image (no need to store return value)
+      await supabase.storage
+          .from('report-images')
+          .upload(fileName, _image!, fileOptions: const FileOptions(upsert: false));
+
+      // Get public URL
+      final imageUrl = supabase.storage.from('report-images').getPublicUrl(fileName);
+
+      // Prepare payload
+      final payload = {
+        'user_id': supabase.auth.currentUser!.id,
+        'title': _title.trim(),
+        'description': _description.isEmpty ? null : _description.trim(),
+        'category': _category,
+        'image_urls': [imageUrl],
+        'latitude': _location!.latitude,
+        'longitude': _location!.longitude,
+      };
+
+      final response = await http.post(
+        Uri.parse(submitReportUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Server error: ${response.body}');
+      }
+
+      final result = jsonDecode(response.body);
+      debugPrint('Report ID: ${result['report_id']} | Merged: ${result['merged']}');
+
+      if (mounted) Navigator.pop(context);
+
       setState(() {
         _currentStep = 0;
         _image = null;
         _title = '';
         _description = '';
-        _category = 'Pothole';
-        _isAtLocation = true;
+        _category = 'Other';
+        _isAtLocation = false;
         _location = null;
-        _locationError = '';
       });
-
-      // Reset page controller
       _pageController.jumpToPage(0);
 
-      // Show success dialog
       _showSuccessDialog();
-    });
+    } catch (e) {
+      if (!mounted) return;
+      debugPrint('Submit error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
   }
 
   void _showSuccessDialog() {
@@ -312,7 +385,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.1),
+                  color: Colors.green.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -479,11 +552,13 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
             child: PageView(
               controller: _pageController,
               physics: const NeverScrollableScrollPhysics(),
-              onPageChanged: (index) => setState(() => _currentStep = index),
+              onPageChanged: (index) {
+                setState(() => _currentStep = index);
+              },
               children: [
-                _buildStep1(), // Photo
-                _buildStep2(), // Details
-                _buildStep3(), // Preview
+                _buildStep1(),
+                _buildStep2(),
+                _buildStep3(),
               ],
             ),
           ),
@@ -622,7 +697,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
               onTap: _showImageSourceDialog,
               child: Container(
                 width: double.infinity,
-                height: 50.h,
+                height: 40.h,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(24),
@@ -633,7 +708,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
+                      color: Colors.black.withValues(alpha: 0.05),
                       blurRadius: 10,
                       offset: const Offset(0, 4),
                     ),
@@ -646,7 +721,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
                     Container(
                       padding: const EdgeInsets.all(24),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).primaryColor.withOpacity(0.1),
+                        color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
@@ -813,7 +888,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
                       BoxShadow(
                         color: Theme.of(context)
                             .primaryColor
-                            .withOpacity(0.3),
+                            .withValues(alpha: 0.3),
                         blurRadius: 8,
                         offset: const Offset(0, 4),
                       ),
@@ -897,7 +972,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).primaryColor.withOpacity(0.1),
+                        color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(
@@ -937,7 +1012,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
                           _getCurrentLocation();
                         }
                       },
-                      activeColor: Theme.of(context).primaryColor,
+                      activeThumbColor: Theme.of(context).primaryColor,
                     ),
                   ],
                 ),
@@ -1049,7 +1124,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
@@ -1111,10 +1186,10 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Theme.of(context).primaryColor.withOpacity(0.1),
+              color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: Theme.of(context).primaryColor.withOpacity(0.3),
+                color: Theme.of(context).primaryColor.withValues(alpha: 0.3),
               ),
             ),
             child: Row(
@@ -1152,7 +1227,7 @@ class _ReportScreenState extends State<ReportScreen> with TickerProviderStateMix
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Theme.of(context).primaryColor.withOpacity(0.1),
+              color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
